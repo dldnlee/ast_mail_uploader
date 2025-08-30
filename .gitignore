@@ -1,0 +1,5 @@
+.env
+.env.example
+.mcp.json
+credentials.json
+token.json 
