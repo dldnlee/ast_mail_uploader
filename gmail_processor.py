@@ -240,8 +240,22 @@ class GmailProcessor:
         
         return text_content.strip()
     
+    def _email_already_processed(self, gmail_message_id: str) -> bool:
+        """Check if an email with this Gmail message ID has already been processed."""
+        try:
+            response = self.supabase.table('mail_history').select('id').eq('gmail_message_id', gmail_message_id).execute()
+            return len(response.data) > 0
+        except Exception as e:
+            logger.error(f"Error checking if email already processed: {e}")
+            return False
+    
     def process_email(self, message_id: str) -> bool:
         try:
+            # Check if this email has already been processed
+            if self._email_already_processed(message_id):
+                logger.info(f"Email {message_id} already processed, skipping...")
+                return True
+            
             message = self.gmail_service.users().messages().get(
                 userId='me', 
                 id=message_id,
@@ -287,7 +301,8 @@ class GmailProcessor:
                 'summarized_content': summary,
                 'received_date': received_date,
                 'company_entity_id': company_entity_id,
-                'receiver_mail': self.user_email
+                'receiver_mail': self.user_email,
+                'gmail_message_id': message_id
             }
             
             response = self.supabase.table('mail_history').insert(mail_data).execute()
