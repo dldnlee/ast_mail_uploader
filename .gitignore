@@ -1,5 +1,16 @@
 .env
-.env.example
 .mcp.json
 credentials.json
-token.json 
+token.json
+
+# Build artifacts
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+*.spec.bak
+
+# System files
+.DS_Store
+Thumbs.db
