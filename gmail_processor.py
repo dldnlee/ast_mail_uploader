@@ -11,6 +11,7 @@ import json
 import base64
 import logging
 import re
+import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from email.mime.text import MIMEText
@@ -25,8 +26,23 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from supabase import create_client, Client
 from email_validator import validate_email, EmailNotValidError
+from email_extractor import EmailExtractor
 
-load_dotenv()
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# Load environment variables from embedded .env file or local one
+env_path = get_resource_path('.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+else:
+    load_dotenv()  # Try local .env as fallback
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +54,7 @@ class GmailProcessor:
         self.supabase: Client = self._init_supabase()
         self.gmail_service = self._init_gmail_service()
         self.openai_client = self._init_openai()
+        self.email_extractor = EmailExtractor(self.openai_client)
         self.user_email = self._get_user_email()
         
     def _init_supabase(self) -> Client:
@@ -52,7 +69,17 @@ class GmailProcessor:
     def _init_gmail_service(self):
         creds = None
         token_path = os.getenv('GMAIL_TOKEN_PATH', 'token.json')
-        credentials_path = os.getenv('GMAIL_CREDENTIALS_PATH', 'credentials.json')
+        
+        # Try to find credentials.json - first check for embedded, then local
+        embedded_credentials = get_resource_path('credentials.json')
+        local_credentials = 'credentials.json'
+        
+        if os.path.exists(embedded_credentials):
+            credentials_path = embedded_credentials
+        elif os.path.exists(local_credentials):
+            credentials_path = local_credentials
+        else:
+            credentials_path = os.getenv('GMAIL_CREDENTIALS_PATH', 'credentials.json')
         
         if os.path.exists(token_path):
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
@@ -61,6 +88,8 @@ class GmailProcessor:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
+                if not os.path.exists(credentials_path):
+                    raise FileNotFoundError(f"Gmail credentials file not found at {credentials_path}. Please ensure credentials.json exists or is properly embedded.")
                 flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
                 creds = flow.run_local_server(port=0)
             
@@ -74,7 +103,10 @@ class GmailProcessor:
         if not api_key:
             raise ValueError("OPENAI_API_KEY must be set in environment variables")
         
-        return openai.OpenAI(api_key=api_key)
+        client = openai.OpenAI(api_key=api_key)
+        model = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
+        
+        return {'client': client, 'model': model}
     
     def _get_user_email(self) -> str:
         try:
@@ -98,24 +130,62 @@ class GmailProcessor:
         name, email_addr = parseaddr(address)
         return name.strip() if name.strip() else None
     
-    def find_or_create_company_entity(self, email: str, name: Optional[str] = None) -> Optional[str]:
+    def find_or_create_company_entity(self, email: str, name: Optional[str] = None, 
+                                    subject: str = "", body_content: str = "") -> Optional[str]:
         try:
-            response = self.supabase.table('company_entity').select('id').eq('email', email).execute()
+            response = self.supabase.table('company_entity').select('id, phone_num, position, category').eq('email', email).execute()
             
             if response.data:
+                existing_entity = response.data[0]
                 logger.info(f"Found existing company entity for {email}")
-                return response.data[0]['id']
+                
+                # Check if we need to update missing information
+                needs_update = (
+                    not existing_entity.get('phone_num') or 
+                    not existing_entity.get('position') or 
+                    not existing_entity.get('category')
+                )
+                
+                if needs_update and (subject or body_content):
+                    # Extract additional information
+                    sender_info = f"{name} <{email}>" if name else email
+                    extracted_info = self.email_extractor.extract_all_information(subject, body_content, sender_info)
+                    
+                    update_data = {}
+                    if not existing_entity.get('phone_num') and extracted_info.get('phone_numbers'):
+                        update_data['phone_num'] = extracted_info['phone_numbers'][0]  # Take first phone
+                    
+                    if not existing_entity.get('position') and extracted_info.get('sender_position'):
+                        update_data['position'] = extracted_info['sender_position']
+                    
+                    if not existing_entity.get('category') and extracted_info.get('company_categories'):
+                        update_data['category'] = extracted_info['company_categories']
+                    
+                    # Update if we have new information
+                    if update_data:
+                        update_response = self.supabase.table('company_entity').update(update_data).eq('id', existing_entity['id']).execute()
+                        if update_response.data:
+                            logger.info(f"Updated company entity {email} with extracted info: {update_data}")
+                
+                return existing_entity['id']
+            
+            # Create new entity with extracted information
+            sender_info = f"{name} <{email}>" if name else email
+            extracted_info = self.email_extractor.extract_all_information(subject, body_content, sender_info)
             
             entity_data = {
                 'email': email,
                 'name': name or email.split('@')[0],
-                'company': email.split('@')[1] if '@' in email else None
+                'company': email.split('@')[1] if '@' in email else None,
+                'phone_num': extracted_info.get('phone_numbers', [None])[0] if extracted_info.get('phone_numbers') else None,
+                'position': extracted_info.get('sender_position'),
+                'category': extracted_info.get('company_categories')
             }
             
             response = self.supabase.table('company_entity').insert(entity_data).execute()
             
             if response.data:
-                logger.info(f"Created new company entity for {email}")
+                logger.info(f"Created new company entity for {email} with extracted info")
                 return response.data[0]['id']
             
         except Exception as e:
@@ -126,25 +196,21 @@ class GmailProcessor:
     def summarize_email_content(self, subject: str, body: str) -> str:
         try:
             prompt = f"""
-            Please provide a concise summary of this email in Korean:
+            Summarize this email in Korean with 2-3 sentences. Focus on main purpose, key information, and action items. Return ONLY the summary text without any explanations, thinking process, or formatting:
             
             Subject: {subject}
-            Body: {body[:2000]}...
-            
-            Summary should be 2-3 sentences focusing on:
-            1. Main purpose of the email
-            2. Key information or requests
-            3. Any action items or deadlines
+            Body: {body}...
             """
-            
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+
+            response = self.openai_client['client'].chat.completions.create(
+                model=self.openai_client['model'],
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.3
+                temperature=0.3,
+                max_tokens=200
             )
             
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content.strip()
+            return content
             
         except Exception as e:
             logger.error(f"Error summarizing email: {e}")
@@ -196,12 +262,13 @@ class GmailProcessor:
                 logger.warning(f"Could not extract valid email from: {from_address}")
                 return False
             
-            company_entity_id = self.find_or_create_company_entity(email_addr, sender_name)
+            body_content = self._extract_text_from_message(payload)
+            
+            company_entity_id = self.find_or_create_company_entity(email_addr, sender_name, subject, body_content)
             if not company_entity_id:
                 logger.error(f"Failed to create/find company entity for {email_addr}")
                 return False
             
-            body_content = self._extract_text_from_message(payload)
             original_content = f"From: {from_address}\nSubject: {subject}\n\n{body_content}"
             
             summary = self.summarize_email_content(subject, body_content)
