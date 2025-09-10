@@ -89,25 +89,34 @@ jobs:
         path: dist/${{ matrix.asset_name }}
         retention-days: 30
 
-    - name: Create release assets
-      if: startsWith(github.ref, 'refs/tags/')
+    - name: Create release assets (Windows)
+      if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
+      shell: powershell
+      run: |
+        cd dist
+        Compress-Archive -Path ${{ matrix.asset_name }} -DestinationPath ${{ matrix.asset_name }}.zip
+
+    - name: Create release assets (macOS)
+      if: startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS'
       shell: bash
       run: |
         cd dist
-        if [ "${{ runner.os }}" = "Windows" ]; then
-          zip -r ${{ matrix.asset_name }}.zip ${{ matrix.asset_name }}
-        else
-          tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.asset_name }}
-        fi
+        tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.asset_name }}
 
-    - name: Upload release assets
-      if: startsWith(github.ref, 'refs/tags/')
+    - name: Upload release assets (Windows)
+      if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
       uses: actions/upload-artifact@v4
       with:
         name: release-${{ matrix.asset_name }}
-        path: |
-          dist/${{ matrix.asset_name }}.zip
-          dist/${{ matrix.asset_name }}.tar.gz
+        path: dist/${{ matrix.asset_name }}.zip
+        retention-days: 90
+
+    - name: Upload release assets (macOS)
+      if: startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-${{ matrix.asset_name }}
+        path: dist/${{ matrix.asset_name }}.tar.gz
         retention-days: 90
 
   release:
