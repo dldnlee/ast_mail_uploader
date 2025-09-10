@@ -48,18 +48,35 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: Create .env from secrets
+      shell: bash
+      run: |
+        echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+        echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
+        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+        echo "OPENAI_MODEL=${{ secrets.OPENAI_MODEL || 'gpt-3.5-turbo' }}" >> .env
+        echo "GMAIL_TOKEN_PATH=${{ secrets.GMAIL_TOKEN_PATH || 'token.json' }}" >> .env
+        echo "GMAIL_CREDENTIALS_PATH=${{ secrets.GMAIL_CREDENTIALS_PATH || 'credentials.json' }}" >> .env
+        echo "✅ .env file created from GitHub secrets"
+
+    - name: Create credentials.json from secret
+      shell: bash
+      run: |
+        if [ -n "${{ secrets.GMAIL_CREDENTIALS_JSON }}" ]; then
+          echo '${{ secrets.GMAIL_CREDENTIALS_JSON }}' > credentials.json
+          echo "✅ credentials.json created from GitHub secret"
+        else
+          echo "⚠️  GMAIL_CREDENTIALS_JSON secret not found - using placeholder"
+          echo '{"installed":{"client_id":"placeholder","project_id":"placeholder","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_secret":"placeholder","redirect_uris":["http://localhost"]}}' > credentials.json
+        fi
+
     - name: Verify required files exist
       shell: bash
       run: |
-        if [ ! -f ".env" ]; then
-          echo "Warning: .env file not found - creating placeholder"
-          cp .env.example .env || echo "PLACEHOLDER=true" > .env
-        fi
-        if [ ! -f "credentials.json" ]; then
-          echo "Warning: credentials.json not found - creating placeholder"
-          echo '{"installed":{"client_id":"placeholder"}}' > credentials.json
-        fi
-        ls -la gmail_processor.py email_extractor.py
+        echo "📁 Files created for build:"
+        ls -la gmail_processor.py email_extractor.py .env credentials.json
+        echo "📋 .env contents (masked):"
+        sed 's/=.*/=***MASKED***/g' .env
 
     - name: Build executable
       run: |

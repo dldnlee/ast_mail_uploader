@@ -45,17 +45,27 @@ Each release creates:
 
 ## First Release Setup
 
-After pushing this workflow:
+**IMPORTANT**: Before creating releases, you must configure GitHub Secrets.
 
-1. Go to your GitHub repo
-2. Navigate to **Actions** tab
-3. Run workflow manually to test it works
-4. Create your first tag: `git tag v0.1.0 && git push origin v0.1.0`
-5. Check the **Releases** page for your executables
+### Step 1: Configure GitHub Secrets
+See `GITHUB_SECRETS_SETUP.md` for detailed instructions.
 
-## Security Note
+**Required secrets**:
+- `SUPABASE_URL`
+- `SUPABASE_KEY` 
+- `OPENAI_API_KEY`
+- `GMAIL_CREDENTIALS_JSON` (recommended)
 
-The workflow handles missing `.env` and `credentials.json` files by creating placeholders. For security, consider:
-- Using GitHub Secrets for sensitive data
-- Building without embedded credentials for public distribution
-- Having users provide their own configuration files
+### Step 2: Create Your First Release
+After setting up secrets:
+
+1. Push your changes: `git push`
+2. Create your first tag: `git tag v1.0.0 && git push origin v1.0.0`
+3. Check the **Releases** page for your executables
+
+## Security Benefits
+
+✅ **Credentials managed via GitHub Secrets**
+✅ **No sensitive data in Git history**  
+✅ **Encrypted credential storage**
+✅ **Masked in workflow logs**

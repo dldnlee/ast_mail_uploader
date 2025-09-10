@@ -10,7 +10,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ('email_extractor.py', '.'),
-        ('.env', '.'),
         ('credentials.json', '.'),
     ],
     hiddenimports=[
