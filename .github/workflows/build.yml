@@ -1,0 +1,178 @@
+name: Build Cross-Platform Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: gmail_processor.exe
+            asset_name: gmail_processor_windows_x64.exe
+          - os: macos-latest
+            artifact_name: gmail_processor
+            asset_name: gmail_processor_macos_arm64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Verify required files exist
+      shell: bash
+      run: |
+        if [ ! -f ".env" ]; then
+          echo "Warning: .env file not found - creating placeholder"
+          cp .env.example .env || echo "PLACEHOLDER=true" > .env
+        fi
+        if [ ! -f "credentials.json" ]; then
+          echo "Warning: credentials.json not found - creating placeholder"
+          echo '{"installed":{"client_id":"placeholder"}}' > credentials.json
+        fi
+        ls -la gmail_processor.py email_extractor.py
+
+    - name: Build executable
+      run: |
+        pyinstaller gmail_processor.spec --clean
+
+    - name: Verify build output
+      shell: bash
+      run: |
+        ls -la dist/
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          file dist/gmail_processor.exe || echo "Windows executable created"
+        else
+          file dist/gmail_processor || echo "macOS executable created"
+        fi
+
+    - name: Rename executable
+      shell: bash
+      run: |
+        cd dist
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          mv gmail_processor.exe ${{ matrix.asset_name }}
+        else
+          mv gmail_processor ${{ matrix.asset_name }}
+        fi
+        ls -la
+
+    - name: Upload executable as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.asset_name }}
+        path: dist/${{ matrix.asset_name }}
+        retention-days: 30
+
+    - name: Create release assets
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: bash
+      run: |
+        cd dist
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          zip -r ${{ matrix.asset_name }}.zip ${{ matrix.asset_name }}
+        else
+          tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.asset_name }}
+        fi
+
+    - name: Upload release assets
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-${{ matrix.asset_name }}
+        path: |
+          dist/${{ matrix.asset_name }}.zip
+          dist/${{ matrix.asset_name }}.tar.gz
+        retention-days: 90
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+
+    - name: Display artifacts structure
+      run: find artifacts -type f -ls
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Gmail Processor ${{ github.ref_name }}
+        body: |
+          ## Gmail Processor Release ${{ github.ref_name }}
+          
+          ### Downloads
+          - **Windows**: `gmail_processor_windows_x64.exe`
+          - **macOS**: `gmail_processor_macos_arm64` 
+          
+          ### Setup Instructions
+          1. Download the appropriate executable for your platform
+          2. Make executable (macOS/Linux): `chmod +x gmail_processor_macos_arm64`
+          3. Run: `./gmail_processor_macos_arm64` or `gmail_processor_windows_x64.exe`
+          
+          ### Requirements
+          - Valid Gmail API credentials
+          - Supabase project and API keys
+          - OpenAI API key
+          
+          All configuration is embedded in the executable.
+        draft: false
+        prerelease: false
+
+    - name: Upload Windows executable
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/gmail_processor_windows_x64.exe/gmail_processor_windows_x64.exe
+        asset_name: gmail_processor_windows_x64.exe
+        asset_content_type: application/octet-stream
+
+    - name: Upload macOS executable
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/gmail_processor_macos_arm64/gmail_processor_macos_arm64
+        asset_name: gmail_processor_macos_arm64
+        asset_content_type: application/octet-stream
